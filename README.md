@@ -19,7 +19,10 @@ A black-and-white, text-only Android home screen in JetBrains Mono, styled after
 - **Status line** (like Waybar): time · date on the left, battery on the right. Tap the time for alarms and the battery for battery settings. Optionally a **big clock** instead, or no clock.
 - **Pinned apps** as plain text, no icons. Hold one to move it up or down, rename it, unpin it, or open app info.
 - **System status bar hidden** on mono's screen by default; swipe down from the top edge to see it. Other apps keep theirs.
-- **Black & white screen** (optional, needs a one-time PC grant, see below): while mono is on, the whole phone is grayscale; turning mono off restores your colours exactly.
+- **System look while mono is on** (optional, needs a one-time PC grant, see below). Turning mono off restores both exactly:
+  - **black & white**: the whole phone is grayscale.
+  - **quiet system icons**: the status bar in every app drops alarm, mute, Bluetooth, hotspot, location, NFC and similar icons, keeping time, signal and battery.
+- **mono-style pop-ups**: menus and dialogs are pure black with a thin border and JetBrains Mono text, not Android's default grey boxes.
 
 **Gestures**
 | Gesture | Action |
@@ -39,16 +42,18 @@ A black-and-white, text-only Android home screen in JetBrains Mono, styled after
 
 **`···` menu**: all apps · settings · hidden apps · home app settings · turn off mono.
 
-**Settings**: status bar (hidden/shown) · black & white (on/off) · clock (line/big/off) · text size (small/medium/large) · align (left/center/right) · auto-open match · app list order · swipe left/right app.
+**Settings**: status bar (hidden/shown) · black & white (on/off) · system icons (quiet/normal) · clock (line/big/off) · text size (small/medium/large) · align (left/center/right) · auto-open match · app list order · swipe left/right app.
 
 ## Safe by design
 
 - **One permission**: `EXPAND_STATUS_BAR` (a normal permission, granted automatically). It lets a swipe down pull open the notification shade and nothing else.
-- **Optional**: `WRITE_SECURE_SETTINGS`, for the black & white screen only. Android never grants it on install; only a PC can:
+- **Optional**: `WRITE_SECURE_SETTINGS`, for the system look only. Android never grants it on install; only a PC can:
   ```
   adb shell pm grant com.nilupul.mono android.permission.WRITE_SECURE_SETTINGS
   ```
-  On ColorOS, first turn on Developer options → *Disable permission monitoring*. mono uses it only for Android's grayscale colour correction (`accessibility_display_daltonizer`). It saves your previous setting and restores it when mono is turned off. Without the grant, switch grayscale by hand: Accessibility → Color correction → Grayscale.
+  On ColorOS, first turn on Developer options → *Disable permission monitoring* and **restart the phone**; replugging USB is not enough. You can turn that option off again afterwards, and the grant stays.
+
+  mono touches exactly two system settings with it: grayscale colour correction (`accessibility_display_daltonizer*`) and the status bar's hidden-icons list (`icon_blacklist`). It saves each previous value before the first change and restores it when mono is turned off. Without the grant, switch grayscale by hand: Accessibility → Color correction → Grayscale.
 - No internet, no services, no background work, no broadcast receivers in the manifest. Launch counts for "most used" stay on the phone.
 - **Installing changes nothing.** The home screen ships disabled (`android:enabled="false"`).
 - **Easy on/off**: open **mono** from the app list and tap **turn on** or **turn off**. Off disables mono's home-screen component, so Android falls straight back to the OPPO launcher. You can also turn it off from `···` → *turn off mono*.
@@ -64,6 +69,7 @@ These are common in other minimal launchers but need deep system access, so mono
 | unread-notification highlights, now playing | Notification access |
 | screen time on home | Usage access |
 | contact search | Contacts permission |
+| system-wide JetBrains Mono font | root (ColorOS only allows Theme Store fonts; the zFont "Myanmar region" trick is unconfirmed on ColorOS 12) |
 
 ## Build
 
@@ -86,6 +92,7 @@ src/com/nilupul/mono/
   Apps.java                  app list, pins/hidden/renames/usage, font, on/off logic
   HomeActivity.java          home screen, gestures, search drawer, settings
   SwitchActivity.java        the "mono" on/off screen in the app list
+  Ui.java                    mono-style pop-ups (lists, confirms, text input)
 res/                         black theme, ">_" icon
 assets/                      JetBrains Mono Regular + its OFL licence
 build.ps1                    build script

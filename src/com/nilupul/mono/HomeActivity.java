@@ -1,7 +1,6 @@
 package com.nilupul.mono;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.SearchManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -132,7 +131,7 @@ public class HomeActivity extends Activity {
         resumed = true;
         if (dirty) reload();
         applyStatusBar();
-        if (Apps.grayWanted(this) && Apps.isOn(this)) Apps.setGray(this, true);
+        if (Apps.isOn(this)) Apps.applyLooks(this); // grayscale + quiet status bar, if wanted
         tick.run();
         Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (sticky != null) showBattery(sticky);
@@ -435,11 +434,13 @@ public class HomeActivity extends Activity {
         SharedPreferences p = prefs();
         boolean barHidden = p.getBoolean("hide_status_bar", true);
         boolean auto = p.getBoolean("auto_open", true);
-        boolean canGray = Apps.canGray(this);
-        boolean gray = Apps.grayWanted(this);
+        boolean canTweak = Apps.canTweak(this);
+        boolean gray = Apps.lookWanted(this, Apps.LOOK_GRAY);
+        boolean quiet = Apps.lookWanted(this, Apps.LOOK_ICONS);
         String[] items = {
                 "status bar      " + (barHidden ? "hidden" : "shown"),
-                "black & white   " + (!canGray ? "needs pc setup" : gray ? "on" : "off"),
+                "black & white   " + (!canTweak ? "needs pc setup" : gray ? "on" : "off"),
+                "system icons    " + (!canTweak ? "needs pc setup" : quiet ? "quiet" : "normal"),
                 "clock           " + p.getString("clock", "line"),
                 "text size       " + p.getString("size", "medium"),
                 "align           " + p.getString("align", "left"),
@@ -450,36 +451,35 @@ public class HomeActivity extends Activity {
         };
         choose("settings", items, which -> {
             if (which == 0) p.edit().putBoolean("hide_status_bar", !barHidden).apply();
-            else if (which == 1) {
-                if (!canGray) { graySetupDialog(); return; }
-                p.edit().putBoolean("bw_screen", !gray).apply();
-                Apps.setGray(this, !gray);
+            else if (which == 1 || which == 2) {
+                if (!canTweak) { setupDialog(); return; }
+                String look = which == 1 ? Apps.LOOK_GRAY : Apps.LOOK_ICONS;
+                Apps.setLookWanted(this, look, !(which == 1 ? gray : quiet));
+                Apps.applyLooks(this);
             }
-            else if (which == 2) cycle("clock", CLOCKS, "line");
-            else if (which == 3) cycle("size", SIZES, "medium");
-            else if (which == 4) cycle("align", ALIGNS, "left");
-            else if (which == 5) p.edit().putBoolean("auto_open", !auto).apply();
-            else if (which == 6) cycle("order", ORDERS, "a-z");
-            else if (which == 7) { pickApp("swipe_left", "swipe left opens"); return; }
-            else if (which == 8) { pickApp("swipe_right", "swipe right opens"); return; }
+            else if (which == 3) cycle("clock", CLOCKS, "line");
+            else if (which == 4) cycle("size", SIZES, "medium");
+            else if (which == 5) cycle("align", ALIGNS, "left");
+            else if (which == 6) p.edit().putBoolean("auto_open", !auto).apply();
+            else if (which == 7) cycle("order", ORDERS, "a-z");
+            else if (which == 8) { pickApp("swipe_left", "swipe left opens"); return; }
+            else if (which == 9) { pickApp("swipe_right", "swipe right opens"); return; }
             applySettings();
             settingsDialog(); // reopen so the new value is visible
         });
     }
 
-    private void graySetupDialog() {
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("black & white screen")
-                .setMessage("mono can turn the whole screen grey while it's on, and give your colours "
-                        + "back when you turn it off.\n\nandroid only lets a pc allow this. with the "
-                        + "phone plugged in, run once:\n\nadb shell pm grant com.nilupul.mono "
-                        + "android.permission.WRITE_SECURE_SETTINGS\n\nor switch it by hand: "
-                        + "accessibility → color correction → grayscale.")
-                .setPositiveButton("ok", null)
-                .setNeutralButton("open accessibility", (d, w) -> Apps.tryStart(this,
+    private void setupDialog() {
+        Ui.confirm(this, "system look",
+                "while it's on, mono can turn the whole screen grey and quieten the status bar "
+                        + "icons, then put both back when you turn it off.\n\nandroid only lets a pc "
+                        + "allow this. with the phone plugged in, run once:\n\nadb shell pm grant "
+                        + "com.nilupul.mono android.permission.WRITE_SECURE_SETTINGS\n\nor do it by "
+                        + "hand: accessibility → color correction → grayscale.",
+                "ok", null,
+                "accessibility", () -> Apps.tryStart(this,
                         new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        "can't open accessibility settings"))
-                .show();
+                        "can't open accessibility settings"));
     }
 
     private void pickApp(String prefKey, String title) {
@@ -644,15 +644,8 @@ public class HomeActivity extends Activity {
 
     // ---------------------------------------------------------------- menus
 
-    private interface Pick {
-        void on(int which);
-    }
-
-    private void choose(String title, String[] items, Pick pick) {
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle(title)
-                .setItems(items, (d, which) -> pick.on(which))
-                .show();
+    private void choose(String title, String[] items, Ui.Pick pick) {
+        Ui.list(this, title, items, pick);
     }
 
     private void pinMenu(Apps.App a) {
@@ -696,22 +689,9 @@ public class HomeActivity extends Activity {
     }
 
     private void renameDialog(Apps.App a) {
-        EditText e = new EditText(this);
-        e.setTypeface(Apps.font(this));
-        e.setSingleLine(true);
-        e.setText(a.label);
-        e.setSelectAllOnFocus(true);
-        FrameLayout wrap = new FrameLayout(this);
-        int p = Apps.dp(this, 20);
-        wrap.setPadding(p, Apps.dp(this, 8), p, 0);
-        wrap.addView(e);
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("rename " + a.original)
-                .setView(wrap)
-                .setPositiveButton("save", (d, w) -> { Apps.rename(this, a, e.getText().toString()); reload(); })
-                .setNeutralButton("reset", (d, w) -> { Apps.rename(this, a, null); reload(); })
-                .setNegativeButton("cancel", null)
-                .show();
+        Ui.input(this, "rename " + a.original.toLowerCase(Locale.ROOT), a.label,
+                name -> { Apps.rename(this, a, name); reload(); },
+                () -> { Apps.rename(this, a, null); reload(); });
     }
 
     private void menu() {
@@ -747,15 +727,14 @@ public class HomeActivity extends Activity {
     }
 
     private void confirmTurnOff() {
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("turn off mono?")
-                .setMessage("your normal OPPO home screen comes back. open \"mono\" from your apps to turn it on again.")
-                .setPositiveButton("turn off", (d, w) -> {
+        Ui.confirm(this, "turn off mono?",
+                "your normal OPPO home screen, colours and status bar icons come back. "
+                        + "open \"mono\" from your apps to turn it on again.",
+                "turn off", () -> {
                     Apps.turnOff(this);
                     finish();
-                })
-                .setNegativeButton("cancel", null)
-                .show();
+                },
+                null, null);
     }
 
     // ---------------------------------------------------- status line + data

@@ -122,51 +122,97 @@ final class Apps {
         }
     }
 
-    // ------------------------------------------------- black & white screen
+    // ------------------------------------------ system look while mono is on
+    //
+    // "Looks" are Android system settings mono switches on together with itself and
+    // puts back exactly as they were when mono is turned off. Each previous value is
+    // saved before the first change. Needs WRITE_SECURE_SETTINGS (one-time PC grant).
+
+    static final String LOOK_GRAY = "gray";
+    static final String LOOK_ICONS = "icons";
 
     private static final String GRAY_ON = "accessibility_display_daltonizer_enabled";
     private static final String GRAY_MODE = "accessibility_display_daltonizer";
-    private static final int MONOCHROME = 0; // Color correction -> Grayscale
+    private static final String ICONS = "icon_blacklist";
+    private static final String NULL = "\u0000null";
+
+    /** Accessibility -> Color correction -> Grayscale, for the whole screen. */
+    private static final String[][] GRAY = {{GRAY_MODE, "0"}, {GRAY_ON, "1"}};
+
+    /** Status bar keeps time, signal and battery; these system icons are hidden. */
+    private static final String[][] QUIET_ICONS = {{ICONS,
+            "volume,zen,mute,bluetooth,hotspot,headset,alarm_clock,location,nfc,rotate,vpn,"
+            + "data_saver,speakerphone,cast"}};
 
     /** True once the one-time PC grant has been done (adb shell pm grant ... WRITE_SECURE_SETTINGS). */
-    static boolean canGray(Context c) {
+    static boolean canTweak(Context c) {
         return c.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS")
                 == PackageManager.PERMISSION_GRANTED;
     }
 
-    static boolean grayWanted(Context c) {
-        return prefs(c).getBoolean("bw_screen", true);
+    static boolean lookWanted(Context c, String look) {
+        return prefs(c).getBoolean(LOOK_GRAY.equals(look) ? "bw_screen" : "quiet_icons", true);
     }
 
-    /**
-     * Switch Android's own grayscale (Accessibility -> Color correction -> Grayscale) on or off.
-     * The previous colour setting is saved first and restored exactly when switched off.
-     */
-    static void setGray(Context c, boolean on) {
-        if (!canGray(c)) return;
-        ContentResolver r = c.getContentResolver();
+    static void setLookWanted(Context c, String look, boolean on) {
+        prefs(c).edit().putBoolean(LOOK_GRAY.equals(look) ? "bw_screen" : "quiet_icons", on).apply();
+    }
+
+    /** mono is in use: apply each look the user wants, undo the ones they don't. */
+    static void applyLooks(Context c) {
+        setLook(c, LOOK_GRAY, lookWanted(c, LOOK_GRAY));
+        setLook(c, LOOK_ICONS, lookWanted(c, LOOK_ICONS));
+    }
+
+    /** mono is off: put every system setting back the way it was. */
+    static void restoreLooks(Context c) {
+        setLook(c, LOOK_GRAY, false);
+        setLook(c, LOOK_ICONS, false);
+    }
+
+    private static void setLook(Context c, String look, boolean on) {
+        if (!canTweak(c)) return;
         SharedPreferences p = prefs(c);
+        migrateOldGray(p);
+        String[][] values = LOOK_GRAY.equals(look) ? GRAY : QUIET_ICONS;
+        String flag = "applied:" + look;
+        ContentResolver r = c.getContentResolver();
         try {
             if (on) {
-                if (!p.getBoolean("gray_applied", false)) {
-                    p.edit().putInt("gray_prev_on", Settings.Secure.getInt(r, GRAY_ON, 0))
-                            .putInt("gray_prev_mode", Settings.Secure.getInt(r, GRAY_MODE, -1))
-                            .putBoolean("gray_applied", true)
-                            .apply();
+                if (!p.getBoolean(flag, false)) {
+                    SharedPreferences.Editor e = p.edit();
+                    for (String[] kv : values) {
+                        String prev = Settings.Secure.getString(r, kv[0]);
+                        e.putString("prev:" + kv[0], prev == null ? NULL : prev);
+                    }
+                    e.putBoolean(flag, true).commit(); // saved before anything changes
                 }
-                if (Settings.Secure.getInt(r, GRAY_MODE, -1) != MONOCHROME) {
-                    Settings.Secure.putInt(r, GRAY_MODE, MONOCHROME);
+                for (String[] kv : values) {
+                    if (!kv[1].equals(Settings.Secure.getString(r, kv[0]))) Settings.Secure.putString(r, kv[0], kv[1]);
                 }
-                if (Settings.Secure.getInt(r, GRAY_ON, 0) != 1) Settings.Secure.putInt(r, GRAY_ON, 1);
-            } else if (p.getBoolean("gray_applied", false)) {
-                int prevMode = p.getInt("gray_prev_mode", -1);
-                if (prevMode >= 0) Settings.Secure.putInt(r, GRAY_MODE, prevMode);
-                Settings.Secure.putInt(r, GRAY_ON, p.getInt("gray_prev_on", 0));
-                p.edit().putBoolean("gray_applied", false).apply();
+            } else if (p.getBoolean(flag, false)) {
+                for (String[] kv : values) {
+                    String prev = p.getString("prev:" + kv[0], NULL);
+                    Settings.Secure.putString(r, kv[0], NULL.equals(prev) ? null : prev);
+                }
+                p.edit().putBoolean(flag, false).commit();
             }
         } catch (RuntimeException ignored) {
-            // permission revoked or setting blocked by the system: leave the screen as it is
+            // permission revoked or setting blocked by the system: leave it as it is
         }
+    }
+
+    /** v1.2 saved grayscale state under other keys; carry it over so it still restores correctly. */
+    private static void migrateOldGray(SharedPreferences p) {
+        if (!p.contains("gray_applied")) return;
+        SharedPreferences.Editor e = p.edit();
+        if (p.getBoolean("gray_applied", false)) {
+            e.putString("prev:" + GRAY_ON, String.valueOf(p.getInt("gray_prev_on", 0)));
+            int mode = p.getInt("gray_prev_mode", -1);
+            e.putString("prev:" + GRAY_MODE, mode < 0 ? NULL : String.valueOf(mode));
+            e.putBoolean("applied:" + LOOK_GRAY, true);
+        }
+        e.remove("gray_applied").remove("gray_prev_on").remove("gray_prev_mode").commit();
     }
 
     // ------------------------------------------------------- usage counts
@@ -339,7 +385,7 @@ final class Apps {
 
     /** Turn mono off: remove its home screen, so Android goes back to the OPPO home screen. */
     static void turnOff(Activity a) {
-        setGray(a, false); // colours come back with the OPPO home screen
+        restoreLooks(a); // colours and status bar icons come back with the OPPO home screen
         setHomeEnabled(a, false);
         goHome(a);
         Toast.makeText(a, "mono is off. Open \"mono\" from your apps to turn it back on.",

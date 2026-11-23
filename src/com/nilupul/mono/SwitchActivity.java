@@ -94,8 +94,8 @@ public class SwitchActivity extends Activity {
         super.onResume();
         // If turning on was cancelled, don't leave mono's home screen switched on.
         if (Apps.homeEnabled(this) && !Apps.roleHeld(this)) Apps.setHomeEnabled(this, false);
-        // mono not in use (e.g. home app changed in Settings): give the colours back.
-        if (!Apps.isOn(this)) Apps.setGray(this, false);
+        // mono not in use (e.g. home app changed in Settings): put system settings back.
+        if (!Apps.isOn(this)) Apps.restoreLooks(this);
         render();
     }
 
