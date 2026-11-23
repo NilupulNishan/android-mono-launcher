@@ -93,16 +93,21 @@ $ks = Join-Path $ksDir 'mono.keystore'
 $pwFile = Join-Path $ksDir 'password.txt'
 if (-not (Test-Path $ks)) {
     New-Item -ItemType Directory -Force $ksDir | Out-Null
-    $chars = [char[]]'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
-    $pw = -join (1..24 | ForEach-Object { $chars | Get-Random })
+    # 24 characters from a cryptographically secure random source.
+    $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+    $bytes = New-Object byte[] 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $pw = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
     Set-Content -Path $pwFile -Value $pw -NoNewline -Encoding ascii
+    # Passwords are read from the file, never put on the command line (visible to other processes).
     Invoke-Tool "$jdk\bin\keytool.exe" @('-genkeypair', '-keystore', $ks, '-alias', 'mono', '-keyalg', 'RSA',
-        '-keysize', '2048', '-validity', '10000', '-storepass', $pw, '-keypass', $pw, '-dname', 'CN=mono')
+        '-keysize', '3072', '-validity', '10000', '-storepass:file', $pwFile, '-keypass:file', $pwFile,
+        '-dname', 'CN=mono')
     Write-Host "      new signing key: $ks  (back it up)"
 }
-$pw = (Get-Content $pwFile -Raw).Trim()
-Invoke-Tool $apksigner @('sign', '--ks', $ks, '--ks-key-alias', 'mono', '--ks-pass', "pass:$pw",
-    '--key-pass', "pass:$pw", '--out', "$out\mono.apk", "$out\aligned.apk")
+# One password protects both the keystore and the key (PKCS12); apksigner reuses it for the key.
+Invoke-Tool $apksigner @('sign', '--ks', $ks, '--ks-key-alias', 'mono', '--ks-pass', "file:$pwFile",
+    '--out', "$out\mono.apk", "$out\aligned.apk")
 Invoke-Tool $apksigner @('verify', "$out\mono.apk")
 
 $size = [math]::Round((Get-Item "$out\mono.apk").Length / 1KB)

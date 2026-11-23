@@ -51,6 +51,8 @@ public class SwitchActivity extends Activity {
         border.setStroke(Apps.dp(this, 1), Apps.WHITE);
         button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), border, null));
         button.setClickable(true);
+        // Ignore taps while another app draws over this screen (tapjacking protection).
+        button.setFilterTouchesWhenObscured(true);
         button.setOnClickListener(v -> toggle());
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -63,14 +65,17 @@ public class SwitchActivity extends Activity {
         TextView settings = Apps.text(this, "or choose in home app settings →", 14, Apps.GREY);
         settings.setPadding(0, Apps.dp(this, 16), 0, Apps.dp(this, 16));
         Apps.pressable(settings);
+        settings.setFilterTouchesWhenObscured(true);
         settings.setOnClickListener(v -> openHomeSettings());
 
         TextView note = Apps.text(this,
                 "off = your phone works exactly as before.\n\n"
                 + "mono has no internet access and runs nothing in the background. "
-                + "it only lists your apps and opens them. its one permission lets "
-                + "a swipe down pull open your notifications.\n\n"
-                + "to remove it completely: settings → apps → mono → uninstall.",
+                + "it only lists your apps and opens them. a swipe down pulls open "
+                + "your notifications. black & white and quiet status icons work only "
+                + "if you allow them once from a pc.\n\n"
+                + "to remove it: turn it off here first (that also gives back your "
+                + "colours and status icons), then settings → apps → mono → uninstall.",
                 13, Apps.GREY);
         note.setLineSpacing(0, 1.35f);
         note.setPadding(0, Apps.dp(this, 32), 0, 0);
@@ -102,7 +107,7 @@ public class SwitchActivity extends Activity {
     private void render() {
         boolean on = Apps.isOn(this);
         status.setText(on ? "status: on\nmono is your home screen."
-                          : "status: off\nyour normal OPPO home screen is in use.");
+                          : "status: off\nyour phone's normal home screen is in use.");
         button.setText(on ? "turn off" : "turn on");
     }
 

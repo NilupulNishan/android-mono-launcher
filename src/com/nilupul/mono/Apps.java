@@ -298,7 +298,7 @@ final class Apps {
         SharedPreferences.Editor e = p.edit();
         if (needPins) {
             String[] wanted = {dialer, sms, "com.whatsapp.w4b", "com.whatsapp", "com.android.chrome",
-                    camera, "com.coloros.gallery3d", "com.android.settings"};
+                    camera, "com.coloros.gallery3d", "com.google.android.apps.photos", "com.android.settings"};
             List<String> pins = new ArrayList<>();
             for (String pkg : wanted) {
                 App a = pkg == null ? null : firstByPkg.get(pkg);
@@ -383,9 +383,9 @@ final class Apps {
         return homeEnabled(c) && roleHeld(c);
     }
 
-    /** Turn mono off: remove its home screen, so Android goes back to the OPPO home screen. */
+    /** Turn mono off: remove its home screen, so Android goes back to the phone's own launcher. */
     static void turnOff(Activity a) {
-        restoreLooks(a); // colours and status bar icons come back with the OPPO home screen
+        restoreLooks(a); // colours and status bar icons come back with the normal home screen
         setHomeEnabled(a, false);
         goHome(a);
         Toast.makeText(a, "mono is off. Open \"mono\" from your apps to turn it back on.",

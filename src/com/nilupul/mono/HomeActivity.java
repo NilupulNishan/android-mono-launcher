@@ -728,7 +728,7 @@ public class HomeActivity extends Activity {
 
     private void confirmTurnOff() {
         Ui.confirm(this, "turn off mono?",
-                "your normal OPPO home screen, colours and status bar icons come back. "
+                "your normal home screen, colours and status bar icons come back. "
                         + "open \"mono\" from your apps to turn it on again.",
                 "turn off", () -> {
                     Apps.turnOff(this);
