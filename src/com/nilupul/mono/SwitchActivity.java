@@ -67,8 +67,9 @@ public class SwitchActivity extends Activity {
 
         TextView note = Apps.text(this,
                 "off = your phone works exactly as before.\n\n"
-                + "mono asks for no permissions, has no internet access and runs nothing "
-                + "in the background. it only lists your apps and opens them.\n\n"
+                + "mono has no internet access and runs nothing in the background. "
+                + "it only lists your apps and opens them. its one permission lets "
+                + "a swipe down pull open your notifications.\n\n"
                 + "to remove it completely: settings → apps → mono → uninstall.",
                 13, Apps.GREY);
         note.setLineSpacing(0, 1.35f);

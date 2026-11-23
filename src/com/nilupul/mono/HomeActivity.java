@@ -2,15 +2,19 @@ package com.nilupul.mono;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.SearchManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.LauncherApps;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.net.Uri;
 import android.os.BatteryManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -29,6 +33,8 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.AbsListView;
@@ -42,7 +48,9 @@ import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -52,21 +60,39 @@ import java.util.Set;
 
 /**
  * The home screen: a status line, pinned apps as plain text, and a search drawer.
- * Swipe up (or tap "> search") for all apps. Hold an app for options. Tap "···" for the menu.
+ *
+ * Gestures on home: swipe up = all apps + search, swipe down = notifications,
+ * swipe left / right = an app you choose. Hold an app for options. "···" = menu + settings.
  */
 public class HomeActivity extends Activity {
 
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
 
+    private static final int G_NONE = 0;
+    private static final int G_UP = 1;
+    private static final int G_DOWN = 2;
+    private static final int G_LEFT = 3;
+    private static final int G_RIGHT = 4;
+
+    // setting values
+    private static final String[] CLOCKS = {"line", "big", "off"};
+    private static final String[] SIZES = {"small", "medium", "large"};
+    private static final String[] ALIGNS = {"left", "center", "right"};
+    private static final String[] ORDERS = {"a-z", "most used"};
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Apps.App> shown = new ArrayList<>();
     private List<Apps.App> all = new ArrayList<>();
+    private Map<String, Integer> uses = new HashMap<>();
 
     private LinearLayout homeView;
+    private LinearLayout bigClock;
     private LinearLayout pinsView;
     private LinearLayout drawerView;
     private TextView clock;
+    private TextView bigTime;
+    private TextView bigDate;
     private TextView battery;
     private EditText search;
     private ListView list;
@@ -76,7 +102,8 @@ public class HomeActivity extends Activity {
 
     private boolean resumed;
     private boolean dirty;
-    private boolean flung;
+    private boolean autoFired;
+    private int gesture = G_NONE;
 
     // ------------------------------------------------------------ lifecycle
 
@@ -84,9 +111,10 @@ public class HomeActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         all = Apps.load(this);
-        Apps.seedPins(this, all);
+        uses = Apps.uses(this);
+        Apps.seedDefaults(this, all);
         setContentView(build());
-        renderPins();
+        applySettings();
         launcherApps = getSystemService(LauncherApps.class);
         if (launcherApps != null) launcherApps.registerCallback(appsChanged, handler);
     }
@@ -103,6 +131,7 @@ public class HomeActivity extends Activity {
         super.onResume();
         resumed = true;
         if (dirty) reload();
+        applyStatusBar();
         tick.run();
         Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (sticky != null) showBattery(sticky);
@@ -125,6 +154,12 @@ public class HomeActivity extends Activity {
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) applyStatusBar(); // dialogs and other apps can bring the bar back
+    }
+
+    @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         closeDrawer(); // Home pressed while mono is showing
@@ -138,16 +173,24 @@ public class HomeActivity extends Activity {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent e) {
-        if (!drawerOpen() && swipe != null && swipe.onTouchEvent(e) && flung) {
-            flung = false;
+        if (!drawerOpen() && swipe != null && swipe.onTouchEvent(e) && gesture != G_NONE) {
+            int g = gesture;
+            gesture = G_NONE;
             MotionEvent cancel = MotionEvent.obtain(e);
             cancel.setAction(MotionEvent.ACTION_CANCEL);
-            super.dispatchTouchEvent(cancel); // so the swipe never also taps an app
+            super.dispatchTouchEvent(cancel); // so a swipe never also taps an app
             cancel.recycle();
-            openDrawer();
+            onGesture(g);
             return true;
         }
         return super.dispatchTouchEvent(e);
+    }
+
+    private void onGesture(int g) {
+        if (g == G_UP) openDrawer();
+        else if (g == G_DOWN) Apps.expandNotifications(this);
+        else if (g == G_LEFT) openKey(prefs().getString("swipe_left", ""));
+        else if (g == G_RIGHT) openKey(prefs().getString("swipe_right", ""));
     }
 
     // ---------------------------------------------------------------- views
@@ -167,9 +210,7 @@ public class HomeActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         clock = Apps.text(this, "", 14, Apps.GREY);
         clock.setPadding(0, Apps.dp(this, 10), Apps.dp(this, 10), Apps.dp(this, 10));
-        clock.setOnClickListener(v -> Apps.tryStart(this,
-                new Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                "no clock app"));
+        clock.setOnClickListener(v -> openAlarms());
         battery = Apps.text(this, "", 14, Apps.GREY);
         battery.setPadding(Apps.dp(this, 10), Apps.dp(this, 10), 0, Apps.dp(this, 10));
         battery.setOnClickListener(v -> Apps.tryStart(this,
@@ -179,6 +220,17 @@ public class HomeActivity extends Activity {
         bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         bar.addView(battery, new LinearLayout.LayoutParams(WRAP, WRAP));
         homeView.addView(bar, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        bigClock = new LinearLayout(this);
+        bigClock.setOrientation(LinearLayout.VERTICAL);
+        bigClock.setPadding(0, Apps.dp(this, 28), 0, 0);
+        bigTime = Apps.text(this, "", 64, Apps.WHITE);
+        bigDate = Apps.text(this, "", 16, Apps.GREY);
+        bigDate.setPadding(0, Apps.dp(this, 10), 0, 0);
+        bigClock.addView(bigTime);
+        bigClock.addView(bigDate);
+        bigClock.setOnClickListener(v -> openAlarms());
+        homeView.addView(bigClock, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         homeView.addView(new View(this), new LinearLayout.LayoutParams(MATCH, 0, 1f));
         pinsView = new LinearLayout(this);
@@ -207,11 +259,16 @@ public class HomeActivity extends Activity {
                 if (e1 == null || e2 == null) return false;
                 float dy = e2.getY() - e1.getY();
                 float dx = e2.getX() - e1.getX();
-                if (dy < -Apps.dp(HomeActivity.this, 48) && Math.abs(dy) > Math.abs(dx)) {
-                    flung = true;
-                    return true;
+                int minY = Apps.dp(HomeActivity.this, 48);
+                int minX = Apps.dp(HomeActivity.this, 72);
+                if (Math.abs(dy) > Math.abs(dx)) {
+                    if (dy < -minY) gesture = G_UP;
+                    else if (dy > minY) gesture = G_DOWN;
+                } else {
+                    if (dx < -minX) gesture = G_LEFT;
+                    else if (dx > minX) gesture = G_RIGHT;
                 }
-                return false;
+                return gesture != G_NONE;
             }
         });
         swipe.setIsLongpressEnabled(false);
@@ -227,7 +284,7 @@ public class HomeActivity extends Activity {
         search.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         search.setTextColor(Apps.WHITE);
         search.setHintTextColor(Apps.DIM);
-        search.setHint("> search");
+        search.setHint("> search apps or web");
         search.setBackground(null);
         search.setSingleLine(true);
         search.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -236,13 +293,17 @@ public class HomeActivity extends Activity {
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
-            @Override public void afterTextChanged(Editable s) { filter(s.toString()); }
+            @Override public void afterTextChanged(Editable s) {
+                filter(s.toString());
+                maybeAutoOpen();
+            }
         });
         search.setOnEditorActionListener((v, action, ev) -> {
             boolean enter = ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER
                     && ev.getAction() == KeyEvent.ACTION_DOWN;
             if (action == EditorInfo.IME_ACTION_GO || enter) {
                 if (!shown.isEmpty()) launch(shown.get(0));
+                else if (!results.query.isEmpty()) webSearch();
                 return true;
             }
             return false;
@@ -256,13 +317,17 @@ public class HomeActivity extends Activity {
         list = new ListView(this);
         list.setDivider(null);
         list.setVerticalScrollBarEnabled(false);
+        list.setFastScrollEnabled(true);
         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
         list.setSelector(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), null, new ColorDrawable(Apps.WHITE)));
         results = new ResultsAdapter();
         list.setAdapter(results);
-        list.setOnItemClickListener((p, v, pos, id) -> launch(shown.get(pos)));
+        list.setOnItemClickListener((p, v, pos, id) -> {
+            if (pos < shown.size()) launch(shown.get(pos));
+            else webSearch();
+        });
         list.setOnItemLongClickListener((p, v, pos, id) -> {
-            appMenu(shown.get(pos));
+            if (pos < shown.size()) appMenu(shown.get(pos));
             return true;
         });
         list.setOnScrollListener(new AbsListView.OnScrollListener() {
@@ -287,10 +352,13 @@ public class HomeActivity extends Activity {
         if (!all.isEmpty() && pins.removeIf(k -> !byKey.containsKey(k))) {
             Apps.savePins(this, pins); // forget apps that were uninstalled
         }
+        int align = alignGravity();
+        float sp = pick(prefs().getString("size", "medium"), SIZES, new float[] {22, 26, 32});
         for (String k : pins) {
             Apps.App a = byKey.get(k);
-            TextView t = Apps.text(this, a.label, 26, Apps.WHITE);
+            TextView t = Apps.text(this, a.label, sp, Apps.WHITE);
             t.setPadding(0, Apps.dp(this, 11), 0, Apps.dp(this, 11));
+            t.setGravity(align | Gravity.CENTER_VERTICAL);
             t.setSingleLine(true);
             t.setEllipsize(TextUtils.TruncateAt.END);
             Apps.pressable(t);
@@ -304,8 +372,101 @@ public class HomeActivity extends Activity {
         if (pins.isEmpty()) {
             TextView t = Apps.text(this, "no pinned apps.\nswipe up, hold an app, choose \"pin to home\".", 14, Apps.GREY);
             t.setLineSpacing(0, 1.3f);
-            pinsView.addView(t);
+            t.setGravity(align);
+            pinsView.addView(t, new LinearLayout.LayoutParams(MATCH, WRAP));
         }
+    }
+
+    // ------------------------------------------------------------- settings
+
+    private SharedPreferences prefs() {
+        return Apps.prefs(this);
+    }
+
+    private static float pick(String value, String[] keys, float[] values) {
+        int i = Arrays.asList(keys).indexOf(value);
+        return values[i < 0 ? 1 % values.length : i];
+    }
+
+    private int alignGravity() {
+        String a = prefs().getString("align", "left");
+        if ("center".equals(a)) return Gravity.CENTER_HORIZONTAL;
+        if ("right".equals(a)) return Gravity.END;
+        return Gravity.START;
+    }
+
+    private void applySettings() {
+        String style = prefs().getString("clock", "line");
+        clock.setVisibility("line".equals(style) ? View.VISIBLE : View.GONE);
+        bigClock.setVisibility("big".equals(style) ? View.VISIBLE : View.GONE);
+        bigClock.setGravity(alignGravity());
+        applyStatusBar();
+        renderPins();
+        results.notifyDataSetChanged();
+        tick.run();
+    }
+
+    /**
+     * Hide the system status bar on mono's own screen only (mono shows time + battery itself).
+     * Swiping down from the top edge shows it for a moment. Other apps are not affected.
+     */
+    private void applyStatusBar() {
+        boolean hide = prefs().getBoolean("hide_status_bar", true);
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c == null) return;
+            c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            if (hide) c.hide(WindowInsets.Type.statusBars());
+            else c.show(WindowInsets.Type.statusBars());
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(hide
+                    ? View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    : 0);
+        }
+    }
+
+    private void cycle(String key, String[] values, String def) {
+        int i = Arrays.asList(values).indexOf(prefs().getString(key, def));
+        prefs().edit().putString(key, values[(i + 1) % values.length]).apply();
+    }
+
+    private void settingsDialog() {
+        SharedPreferences p = prefs();
+        boolean barHidden = p.getBoolean("hide_status_bar", true);
+        boolean auto = p.getBoolean("auto_open", true);
+        String[] items = {
+                "status bar      " + (barHidden ? "hidden" : "shown"),
+                "clock           " + p.getString("clock", "line"),
+                "text size       " + p.getString("size", "medium"),
+                "align           " + p.getString("align", "left"),
+                "auto-open match " + (auto ? "on" : "off"),
+                "app list order  " + p.getString("order", "a-z"),
+                "swipe left  → " + nameOf(p.getString("swipe_left", "")),
+                "swipe right → " + nameOf(p.getString("swipe_right", "")),
+        };
+        choose("settings", items, which -> {
+            if (which == 0) p.edit().putBoolean("hide_status_bar", !barHidden).apply();
+            else if (which == 1) cycle("clock", CLOCKS, "line");
+            else if (which == 2) cycle("size", SIZES, "medium");
+            else if (which == 3) cycle("align", ALIGNS, "left");
+            else if (which == 4) p.edit().putBoolean("auto_open", !auto).apply();
+            else if (which == 5) cycle("order", ORDERS, "a-z");
+            else if (which == 6) { pickApp("swipe_left", "swipe left opens"); return; }
+            else if (which == 7) { pickApp("swipe_right", "swipe right opens"); return; }
+            applySettings();
+            settingsDialog(); // reopen so the new value is visible
+        });
+    }
+
+    private void pickApp(String prefKey, String title) {
+        List<Apps.App> apps = new ArrayList<>(all);
+        String[] names = new String[apps.size() + 1];
+        names[0] = "(nothing)";
+        for (int i = 0; i < apps.size(); i++) names[i + 1] = apps.get(i).label;
+        choose(title, names, which -> {
+            prefs().edit().putString(prefKey, which == 0 ? "" : apps.get(which - 1).key()).apply();
+            settingsDialog();
+        });
     }
 
     // --------------------------------------------------------------- drawer
@@ -316,6 +477,7 @@ public class HomeActivity extends Activity {
 
     private void openDrawer() {
         if (dirty) reload();
+        uses = Apps.uses(this);
         search.setText("");
         filter("");
         homeView.setVisibility(View.GONE);
@@ -346,29 +508,78 @@ public class HomeActivity extends Activity {
         Apps.open(this, a);
     }
 
-    /** Best match first: name starts with the text, then a word starts with it, then contains it. */
+    private void openKey(String key) {
+        Apps.App a = find(key);
+        if (a != null) Apps.open(this, a);
+    }
+
+    private void openAlarms() {
+        Apps.tryStart(this, new Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                "no clock app");
+    }
+
+    private void webSearch() {
+        String q = search.getText().toString().trim();
+        if (q.isEmpty()) return;
+        hideKeyboard();
+        Intent i = new Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, q)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (!Apps.tryStart(this, i, null)) {
+            Apps.tryStart(this, new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "no browser");
+        }
+    }
+
+    /** Like other minimal launchers: when exactly one app matches, open it straight away. */
+    private void maybeAutoOpen() {
+        if (results.query.isEmpty()) {
+            autoFired = false;
+            return;
+        }
+        if (autoFired || !prefs().getBoolean("auto_open", true)) return;
+        if (shown.size() == 1) {
+            autoFired = true;
+            launch(shown.get(0));
+        }
+    }
+
+    private int use(Apps.App a) {
+        Integer n = uses.get(a.key());
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * Best match first: name starts with the text, then initials ("gm" = google maps),
+     * then a word starts with it, then contains it. Within each group, most used first.
+     */
     private void filter(String raw) {
         String q = raw.trim().toLowerCase(Locale.ROOT);
         results.query = q;
         shown.clear();
         Set<String> hidden = Apps.hidden(this);
+        Comparator<Apps.App> byUse = (a, b) -> Integer.compare(use(b), use(a));
         if (q.isEmpty()) {
             for (Apps.App a : all) if (!hidden.contains(a.key())) shown.add(a);
+            if ("most used".equals(prefs().getString("order", "a-z"))) shown.sort(byUse);
         } else {
             // Hidden apps leave the list but can still be found by typing their name.
             List<Apps.App> starts = new ArrayList<>();
+            List<Apps.App> initials = new ArrayList<>();
             List<Apps.App> words = new ArrayList<>();
             List<Apps.App> contains = new ArrayList<>();
             for (Apps.App a : all) {
                 String l = a.label.toLowerCase(Locale.ROOT);
                 String o = a.original.toLowerCase(Locale.ROOT);
                 if (l.startsWith(q) || o.startsWith(q)) starts.add(a);
+                else if (q.length() >= 2 && a.initials.startsWith(q)) initials.add(a);
                 else if (l.contains(" " + q) || o.contains(" " + q)) words.add(a);
                 else if (l.contains(q) || o.contains(q)) contains.add(a);
             }
-            shown.addAll(starts);
-            shown.addAll(words);
-            shown.addAll(contains);
+            for (List<Apps.App> group : Arrays.asList(starts, initials, words, contains)) {
+                group.sort(byUse);
+                shown.addAll(group);
+            }
         }
         results.notifyDataSetChanged();
     }
@@ -376,8 +587,8 @@ public class HomeActivity extends Activity {
     private final class ResultsAdapter extends BaseAdapter {
         String query = "";
 
-        @Override public int getCount() { return shown.size(); }
-        @Override public Object getItem(int i) { return shown.get(i); }
+        @Override public int getCount() { return shown.size() + (query.isEmpty() ? 0 : 1); }
+        @Override public Object getItem(int i) { return i < shown.size() ? shown.get(i) : null; }
         @Override public long getItemId(int i) { return i; }
 
         @Override
@@ -391,10 +602,18 @@ public class HomeActivity extends Activity {
                 t.setSingleLine(true);
                 t.setEllipsize(TextUtils.TruncateAt.END);
             }
-            Apps.App a = shown.get(i);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP,
+                    pick(prefs().getString("size", "medium"), SIZES, new float[] {18, 20, 24}));
             boolean best = i == 0 && !query.isEmpty();
-            t.setText(best ? "> " + a.label : a.label);
-            t.setTextColor(best || query.isEmpty() ? Apps.WHITE : Apps.GREY);
+            if (i >= shown.size()) {
+                String q = search.getText().toString().trim();
+                t.setText((best ? "> " : "") + "search web: " + q);
+                t.setTextColor(best ? Apps.WHITE : Apps.DIM);
+            } else {
+                Apps.App a = shown.get(i);
+                t.setText(best ? "> " + a.label : a.label);
+                t.setTextColor(best || query.isEmpty() ? Apps.WHITE : Apps.GREY);
+            }
             return t;
         }
     }
@@ -473,14 +692,16 @@ public class HomeActivity extends Activity {
 
     private void menu() {
         Set<String> hidden = Apps.hidden(this);
-        String[] items = {"all apps", "hidden apps (" + hidden.size() + ")", "home app settings", "turn off mono"};
+        String[] items = {"all apps", "settings", "hidden apps (" + hidden.size() + ")",
+                "home app settings", "turn off mono"};
         choose("mono", items, which -> {
             if (which == 0) openDrawer();
-            else if (which == 1) hiddenDialog();
-            else if (which == 2) Apps.tryStart(this,
+            else if (which == 1) settingsDialog();
+            else if (which == 2) hiddenDialog();
+            else if (which == 3) Apps.tryStart(this,
                     new Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                     "can't open home settings");
-            else if (which == 3) confirmTurnOff();
+            else if (which == 4) confirmTurnOff();
         });
     }
 
@@ -518,11 +739,15 @@ public class HomeActivity extends Activity {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
+            if (clock == null) return;
             Date now = new Date();
             boolean h24 = DateFormat.is24HourFormat(HomeActivity.this);
             String time = new SimpleDateFormat(h24 ? "HH:mm" : "h:mm a", Locale.getDefault()).format(now);
-            String day = new SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(now);
+            String day = new SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(now)
+                    .toLowerCase(Locale.getDefault());
             clock.setText((time + " · " + day).toLowerCase(Locale.getDefault()));
+            bigTime.setText(time.toLowerCase(Locale.getDefault()));
+            bigDate.setText(day);
             handler.removeCallbacks(this);
             handler.postDelayed(this, 60_000 - (System.currentTimeMillis() % 60_000) + 100);
         }
@@ -548,9 +773,21 @@ public class HomeActivity extends Activity {
         battery.setText((charging ? "chg " : "bat ") + Math.round(level * 100f / scale) + "%");
     }
 
+    private Apps.App find(String key) {
+        if (key == null || key.isEmpty()) return null;
+        for (Apps.App a : all) if (a.key().equals(key)) return a;
+        return null;
+    }
+
+    private String nameOf(String key) {
+        Apps.App a = find(key);
+        return a == null ? "nothing" : a.label;
+    }
+
     private void reload() {
         dirty = false;
         all = Apps.load(this);
+        uses = Apps.uses(this);
         renderPins();
         if (drawerOpen()) filter(search.getText().toString());
     }

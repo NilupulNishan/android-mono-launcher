@@ -2,18 +2,22 @@
 <!--
   mono: a black-and-white, text-only home screen.
 
-  Deliberately requests NO permissions, has NO services, NO manifest
-  broadcast receivers and NO internet access. It cannot change other apps.
+  Its only permission is EXPAND_STATUS_BAR (normal, auto-granted): it can pull
+  down the notification shade and nothing else. NO services, NO manifest
+  broadcast receivers, NO internet access. It cannot change other apps.
 
   HomeActivity ships disabled, so installing mono changes nothing.
   The "mono" app in your app list (SwitchActivity) turns it on and off.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nilupul.mono"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="2"
+    android:versionName="1.1">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
+
+    <!-- Swipe down on the home screen = pull down notifications. -->
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
     <!-- Lets mono see which apps can be opened (package visibility, not a permission). -->
     <queries>

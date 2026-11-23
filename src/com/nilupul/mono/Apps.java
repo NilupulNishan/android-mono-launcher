@@ -23,6 +23,7 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,7 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-/** App list, saved choices (pins, hidden, renames), styling and the on/off switch. */
+/** App list, saved choices (pins, hidden, renames, settings), styling and the on/off switch. */
 final class Apps {
 
     static final int WHITE = 0xFFFFFFFF;
@@ -47,12 +48,16 @@ final class Apps {
         final String cls;
         final String original;
         final String label;
+        final String initials;
 
         App(String pkg, String cls, String original, String label) {
             this.pkg = pkg;
             this.cls = cls;
             this.original = original;
             this.label = label;
+            StringBuilder b = new StringBuilder();
+            for (String w : label.split("[\\s._-]+")) if (!w.isEmpty()) b.append(w.charAt(0));
+            this.initials = b.toString().toLowerCase(Locale.ROOT);
         }
 
         String key() {
@@ -84,7 +89,7 @@ final class Apps {
                 .addCategory(Intent.CATEGORY_LAUNCHER)
                 .setComponent(new ComponentName(a.pkg, a.cls))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        tryStart(c, i, "can't open " + a.label);
+        if (tryStart(c, i, "can't open " + a.label)) countUse(c, a);
     }
 
     static void openInfo(Context c, String pkg) {
@@ -101,6 +106,39 @@ final class Apps {
             if (error != null) Toast.makeText(c, error, Toast.LENGTH_SHORT).show();
             return false;
         }
+    }
+
+    /**
+     * Pull down the notification shade (needs only EXPAND_STATUS_BAR, a normal
+     * auto-granted permission that can do nothing else). Same call other launchers use.
+     */
+    static void expandNotifications(Context c) {
+        try {
+            Object sb = c.getSystemService("statusbar");
+            Class.forName("android.app.StatusBarManager").getMethod("expandNotificationsPanel").invoke(sb);
+        } catch (Exception e) {
+            Toast.makeText(c, "can't open notifications here; swipe from the top edge", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ------------------------------------------------------- usage counts
+
+    /** Launch counts, kept only on the phone, for "most used" order and search ranking. */
+    private static SharedPreferences usage(Context c) {
+        return c.getSharedPreferences("mono_usage", Context.MODE_PRIVATE);
+    }
+
+    private static void countUse(Context c, App a) {
+        SharedPreferences u = usage(c);
+        u.edit().putInt(a.key(), u.getInt(a.key(), 0) + 1).apply();
+    }
+
+    static Map<String, Integer> uses(Context c) {
+        Map<String, Integer> out = new HashMap<>();
+        for (Map.Entry<String, ?> e : usage(c).getAll().entrySet()) {
+            if (e.getValue() instanceof Integer) out.put(e.getKey(), (Integer) e.getValue());
+        }
+        return out;
     }
 
     // --------------------------------------------------------- saved state
@@ -135,38 +173,54 @@ final class Apps {
         e.apply();
     }
 
-    /** First run: pin phone, messages, WhatsApp, Chrome, camera, gallery and settings if present. */
-    static void seedPins(Context c, List<App> all) {
+    /**
+     * First run: pin phone, messages, WhatsApp, Chrome, camera, gallery and settings if present,
+     * and set swipe left = camera, swipe right = phone.
+     */
+    static void seedDefaults(Context c, List<App> all) {
         SharedPreferences p = prefs(c);
-        if (p.getBoolean("seeded", false)) return;
+        boolean needPins = !p.getBoolean("seeded", false);
+        boolean needLeft = !p.contains("swipe_left");
+        boolean needRight = !p.contains("swipe_right");
+        if (!needPins && !needLeft && !needRight) return;
 
-        List<String> wanted = new ArrayList<>();
+        String dialer = null;
+        String sms = null;
+        String camera = null;
         try {
             TelecomManager tm = c.getSystemService(TelecomManager.class);
-            if (tm != null) wanted.add(tm.getDefaultDialerPackage());
+            if (tm != null) dialer = tm.getDefaultDialerPackage();
         } catch (RuntimeException ignored) { }
         try {
-            wanted.add(Telephony.Sms.getDefaultSmsPackage(c));
+            sms = Telephony.Sms.getDefaultSmsPackage(c);
         } catch (RuntimeException ignored) { }
-        wanted.add("com.whatsapp.w4b");
-        wanted.add("com.whatsapp");
-        wanted.add("com.android.chrome");
         ResolveInfo cam = c.getPackageManager().resolveActivity(
                 new Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA), PackageManager.MATCH_DEFAULT_ONLY);
-        if (cam != null && cam.activityInfo != null) wanted.add(cam.activityInfo.packageName);
-        wanted.add("com.coloros.gallery3d");
-        wanted.add("com.android.settings");
+        if (cam != null && cam.activityInfo != null) camera = cam.activityInfo.packageName;
 
         Map<String, App> firstByPkg = new LinkedHashMap<>();
         for (App a : all) if (!firstByPkg.containsKey(a.pkg)) firstByPkg.put(a.pkg, a);
 
-        List<String> pins = new ArrayList<>();
-        for (String pkg : wanted) {
-            App a = pkg == null ? null : firstByPkg.get(pkg);
-            if (a != null && !pins.contains(a.key())) pins.add(a.key());
+        SharedPreferences.Editor e = p.edit();
+        if (needPins) {
+            String[] wanted = {dialer, sms, "com.whatsapp.w4b", "com.whatsapp", "com.android.chrome",
+                    camera, "com.coloros.gallery3d", "com.android.settings"};
+            List<String> pins = new ArrayList<>();
+            for (String pkg : wanted) {
+                App a = pkg == null ? null : firstByPkg.get(pkg);
+                if (a != null && !pins.contains(a.key())) pins.add(a.key());
+            }
+            e.putString("pins", String.join("\n", pins)).putBoolean("seeded", true);
         }
-        savePins(c, pins);
-        p.edit().putBoolean("seeded", true).apply();
+        if (needLeft) {
+            App a = camera == null ? null : firstByPkg.get(camera);
+            e.putString("swipe_left", a == null ? "" : a.key());
+        }
+        if (needRight) {
+            App a = dialer == null ? null : firstByPkg.get(dialer);
+            e.putString("swipe_right", a == null ? "" : a.key());
+        }
+        e.apply();
     }
 
     // ------------------------------------------------------------- styling
