@@ -125,5 +125,5 @@ build.sh / build.ps1     build scripts
 ## Credits & licence
 
 - Code: [MIT](LICENSE) © 2026 Nilupul Nishan.
-- Font: [JetBrains Mono](https://www.jetbrains.com/lp/mono/), SIL Open Font License 1.1 (`assets/JetBrainsMono-OFL.txt`).
+- Font: [JetBrains Mono](https://www.jetbrains.com/lp/mono/) © The JetBrains Mono Project Authors, SIL Open Font License 1.1 (`assets/JetBrainsMono-OFL.txt`). Not covered by the MIT licence.
 - Behaviour inspired by Olauncher, mLauncher, Last Launcher, MinimalSF, Slate and YAM Launcher.
