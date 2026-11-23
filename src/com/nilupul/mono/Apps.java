@@ -1,6 +1,7 @@
 package com.nilupul.mono;
 
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.app.role.RoleManager;
 import android.content.ComponentName;
 import android.content.ContentResolver;
@@ -14,7 +15,9 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.MediaStore;
+import android.service.notification.NotificationListenerService;
 import android.provider.Settings;
 import android.provider.Telephony;
 import android.telecom.TelecomManager;
@@ -162,12 +165,16 @@ final class Apps {
     static void applyLooks(Context c) {
         setLook(c, LOOK_GRAY, lookWanted(c, LOOK_GRAY));
         setLook(c, LOOK_ICONS, lookWanted(c, LOOK_ICONS));
+        setQuiet(c, prefs(c).getBoolean(N_QUIET, false));
+        syncNotifService(c);
     }
 
-    /** mono is off: put every system setting back the way it was. */
+    /** mono is off: put every system setting back the way it was, stop the notification service. */
     static void restoreLooks(Context c) {
         setLook(c, LOOK_GRAY, false);
         setLook(c, LOOK_ICONS, false);
+        setQuiet(c, false);
+        syncNotifService(c);
     }
 
     private static void setLook(Context c, String look, boolean on) {
@@ -213,6 +220,131 @@ final class Apps {
             e.putBoolean("applied:" + LOOK_GRAY, true);
         }
         e.remove("gray_applied").remove("gray_prev_on").remove("gray_prev_mode").commit();
+    }
+
+    // ------------------------------------------------------ notifications
+    //
+    // All four features are off by default and only act while mono is on.
+
+    static final String N_MARKERS = "n_markers";   // "·3" after app names
+    static final String N_LIST = "n_list";         // notification list on home
+    static final String N_FOCUS = "n_focus";       // remove notifications from chosen apps
+    static final String N_QUIET = "n_quiet";       // Do Not Disturb (priority only)
+    private static final String N_FOCUS_APPS = "n_focus_apps";
+
+    static ComponentName notifyService(Context c) {
+        return new ComponentName(c, NotifyService.class);
+    }
+
+    /** Markers, list and focus need the listener; quiet does not. */
+    static boolean listenerWanted(Context c) {
+        SharedPreferences p = prefs(c);
+        return p.getBoolean(N_MARKERS, false) || p.getBoolean(N_LIST, false) || p.getBoolean(N_FOCUS, false);
+    }
+
+    static boolean notifAccess(Context c) {
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
+        return nm != null && nm.isNotificationListenerAccessGranted(notifyService(c));
+    }
+
+    static boolean dndAccess(Context c) {
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
+        return nm != null && nm.isNotificationPolicyAccessGranted();
+    }
+
+    /** True when the listener should be connected: mono is on and a feature needs it. */
+    static boolean listenerShouldRun(Context c) {
+        return listenerWanted(c) && isOn(c);
+    }
+
+    /**
+     * Connect the listener only while mono is on and a feature needs it.
+     *
+     * Pausing uses Android's requestUnbind()/requestRebind() pair. Disabling the component
+     * is only done while access is not granted: once Android has dropped an approved
+     * listener because its component was disabled, re-enabling it does not reconnect it.
+     */
+    static void syncNotifService(Context c) {
+        boolean want = listenerShouldRun(c);
+        boolean access = notifAccess(c);
+        PackageManager pm = c.getPackageManager();
+        ComponentName cn = notifyService(c);
+        boolean enabled = pm.getComponentEnabledSetting(cn) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
+        if (want && !enabled) {
+            pm.setComponentEnabledSetting(cn, PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
+        } else if (!want && !access && enabled) {
+            pm.setComponentEnabledSetting(cn, PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP);
+        }
+        if (want) {
+            if (access && !Notifs.isConnected()) {
+                try {
+                    NotificationListenerService.requestRebind(cn); // resumes after requestUnbind()
+                } catch (RuntimeException ignored) { }
+            }
+        } else {
+            NotifyService live = NotifyService.live;
+            if (live != null) {
+                try {
+                    live.requestUnbind(); // pause: Android disconnects it and stops calling it
+                } catch (RuntimeException ignored) { }
+            }
+            Notifs.connected(false);
+            Notifs.clearHidden(null);
+        }
+    }
+
+    static Set<String> focusApps(Context c) {
+        return new HashSet<>(prefs(c).getStringSet(N_FOCUS_APPS, Collections.emptySet()));
+    }
+
+    static void saveFocusApps(Context c, Set<String> pkgs) {
+        prefs(c).edit().putStringSet(N_FOCUS_APPS, new HashSet<>(pkgs)).apply();
+    }
+
+    static void openNotifAccess(Context c) {
+        Intent detail = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, notifyService(c).flattenToString())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (Build.VERSION.SDK_INT >= 30 && tryStart(c, detail, null)) return;
+        tryStart(c, new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                "can't open notification access");
+    }
+
+    static void openDndAccess(Context c) {
+        tryStart(c, new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                "can't open do not disturb access");
+    }
+
+    /**
+     * Quiet: Do Not Disturb in "priority only" mode (your own DND exceptions still ring).
+     * Switched on once when wanted, so a change you make yourself afterwards is respected;
+     * on turn-off the previous mode comes back, unless you changed it in between.
+     */
+    static void setQuiet(Context c, boolean on) {
+        if (!dndAccess(c)) return;
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
+        SharedPreferences p = prefs(c);
+        boolean applied = p.getBoolean("applied:quiet", false);
+        try {
+            if (on && !applied) {
+                p.edit().putInt("prev:dnd", nm.getCurrentInterruptionFilter())
+                        .putBoolean("applied:quiet", true).commit();
+                nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY);
+            } else if (!on && applied) {
+                if (nm.getCurrentInterruptionFilter() == NotificationManager.INTERRUPTION_FILTER_PRIORITY) {
+                    int prev = p.getInt("prev:dnd", NotificationManager.INTERRUPTION_FILTER_ALL);
+                    if (prev == NotificationManager.INTERRUPTION_FILTER_UNKNOWN) {
+                        prev = NotificationManager.INTERRUPTION_FILTER_ALL;
+                    }
+                    nm.setInterruptionFilter(prev);
+                }
+                p.edit().putBoolean("applied:quiet", false).commit();
+            }
+        } catch (RuntimeException ignored) {
+            // access revoked meanwhile: leave Do Not Disturb as it is
+        }
     }
 
     // ------------------------------------------------------- usage counts
@@ -385,8 +517,8 @@ final class Apps {
 
     /** Turn mono off: remove its home screen, so Android goes back to the phone's own launcher. */
     static void turnOff(Activity a) {
-        restoreLooks(a); // colours and status bar icons come back with the normal home screen
         setHomeEnabled(a, false);
+        restoreLooks(a); // colours, status icons and Do Not Disturb come back; notification service stops
         goHome(a);
         Toast.makeText(a, "mono is off. Open \"mono\" from your apps to turn it back on.",
                 Toast.LENGTH_LONG).show();

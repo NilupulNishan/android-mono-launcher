@@ -57,6 +57,7 @@ That's it. Press Home and you're in mono.
 - app list order: a–z / most used
 - swipe left / right app
 - black & white and system icons (see below)
+- notifications (see below)
 
 ## Optional: black & white phone
 
@@ -81,6 +82,21 @@ You can turn the extra developer switches off again afterwards; the permission s
 
 Don't want a computer? Switch grayscale by hand: Settings → Accessibility → Color correction → Grayscale.
 
+## Optional: notifications
+
+All off by default, and all only active while mono is on. Find them in `···` → settings → notifications.
+
+| Option | What it does | Needs |
+|---|---|---|
+| unread markers | `whatsapp ·3` after app names | notification access |
+| notification list | `whatsapp · 3` lines under the clock; tap one to open the app | notification access |
+| focus mode | removes new notifications from apps you pick (calls, alarms and ongoing ones are never touched); shows `chrome · 2 hidden` | notification access |
+| quiet | Do Not Disturb (priority only) while mono is on; your previous mode comes back when you switch it off | Do Not Disturb access |
+
+When you turn one on, mono explains and opens the Android page where you allow access. Android warns that notification access can read all notifications. **mono only looks at which app posted and how many.** It never reads titles or message text, stores nothing, and has no internet permission. Turning mono off pauses its notification service. To remove the access completely, switch it off in the same menu.
+
+Focus mode can't stop the first sound of a notification, because Android plays it before any app sees it. Combine it with **quiet** for silence.
+
 ## Privacy & security
 
 | | |
@@ -89,7 +105,8 @@ Don't want a computer? Switch grayscale by hand: Settings → Accessibility → 
 | Background | none: no services, no scheduled jobs, no boot receivers |
 | What it stores | your pins, renames, hidden apps, settings and launch counts, in its private storage only; never backed up (`allowBackup="false"`) |
 | Permissions | `EXPAND_STATUS_BAR` (pull down notifications). Optional `WRITE_SECURE_SETTINGS`, only if you grant it from a computer, used for exactly two settings (grayscale and the status-bar icon list), each restored on turn-off |
-| Left out on purpose | double-tap to lock (needs an Accessibility service), unread-notification highlights (notification access), screen time (usage access), contact search (contacts) |
+| Notification features | **Optional**, off by default. Notification access (counts per app only, never text) and Do Not Disturb access, each allowed by you in Android settings and removable any time |
+| Left out on purpose | double-tap to lock (needs an Accessibility service), screen time (usage access), contact search (contacts) |
 
 If you granted the optional permission, **turn mono off before uninstalling it**. Android gives apps no warning before removal, so mono can't restore your settings afterwards. Details and manual undo steps are in [SECURITY.md](SECURITY.md).
 

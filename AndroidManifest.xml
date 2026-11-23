@@ -11,8 +11,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nilupul.mono"
-    android:versionCode="5"
-    android:versionName="1.4">
+    android:versionCode="6"
+    android:versionName="1.5">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
 
@@ -27,6 +27,12 @@
       turned off.
     -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+
+    <!--
+      Optional "quiet": lets mono switch Do Not Disturb on/off. Only works after you allow
+      "Do Not Disturb access" for mono in Android settings; cannot read notifications.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <!-- Lets mono see which apps can be opened (package visibility, not a permission). -->
     <queries>
@@ -65,6 +71,24 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!--
+          Optional notification listener for unread markers, the notification list and focus mode.
+          Ships disabled; mono enables it only while mono is on and one of those features is on,
+          and Android connects it only after you allow "notification access" yourself.
+          Only the system can bind it (BIND_NOTIFICATION_LISTENER_SERVICE). Reads package names
+          and flags only, never notification text.
+        -->
+        <service
+            android:name=".NotifyService"
+            android:enabled="false"
+            android:exported="true"
+            android:label="mono notifications"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- The on/off switch, shown as "mono" in your app list. -->
         <activity

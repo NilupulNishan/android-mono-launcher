@@ -22,7 +22,9 @@ import android.provider.AlarmClock;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.SpannableString;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.text.TextWatcher;
 import android.text.format.DateFormat;
 import android.util.TypedValue;
@@ -52,6 +54,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -93,6 +96,7 @@ public class HomeActivity extends Activity {
     private TextView bigTime;
     private TextView bigDate;
     private TextView battery;
+    private LinearLayout notifBlock;
     private EditText search;
     private ListView list;
     private ResultsAdapter results;
@@ -131,7 +135,9 @@ public class HomeActivity extends Activity {
         resumed = true;
         if (dirty) reload();
         applyStatusBar();
-        if (Apps.isOn(this)) Apps.applyLooks(this); // grayscale + quiet status bar, if wanted
+        if (Apps.isOn(this)) Apps.applyLooks(this); // grayscale, quiet icons, dnd, notification service
+        Notifs.setListener(this::onNotifsChanged);
+        onNotifsChanged();
         tick.run();
         Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (sticky != null) showBattery(sticky);
@@ -140,6 +146,7 @@ public class HomeActivity extends Activity {
     @Override
     protected void onPause() {
         resumed = false;
+        Notifs.setListener(null);
         handler.removeCallbacks(tick);
         try {
             unregisterReceiver(batteryReceiver);
@@ -231,6 +238,12 @@ public class HomeActivity extends Activity {
         bigClock.addView(bigDate);
         bigClock.setOnClickListener(v -> openAlarms());
         homeView.addView(bigClock, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        notifBlock = new LinearLayout(this);
+        notifBlock.setOrientation(LinearLayout.VERTICAL);
+        notifBlock.setPadding(0, Apps.dp(this, 18), 0, 0);
+        notifBlock.setVisibility(View.GONE);
+        homeView.addView(notifBlock, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         homeView.addView(new View(this), new LinearLayout.LayoutParams(MATCH, 0, 1f));
         pinsView = new LinearLayout(this);
@@ -356,7 +369,8 @@ public class HomeActivity extends Activity {
         float sp = pick(prefs().getString("size", "medium"), SIZES, new float[] {22, 26, 32});
         for (String k : pins) {
             Apps.App a = byKey.get(k);
-            TextView t = Apps.text(this, a.label, sp, Apps.WHITE);
+            TextView t = Apps.text(this, "", sp, Apps.WHITE);
+            t.setText(withMarker(a, a.label));
             t.setPadding(0, Apps.dp(this, 11), 0, Apps.dp(this, 11));
             t.setGravity(align | Gravity.CENTER_VERTICAL);
             t.setSingleLine(true);
@@ -402,6 +416,7 @@ public class HomeActivity extends Activity {
         bigClock.setGravity(alignGravity());
         applyStatusBar();
         renderPins();
+        renderNotifs();
         results.notifyDataSetChanged();
         tick.run();
     }
@@ -448,6 +463,7 @@ public class HomeActivity extends Activity {
                 "app list order  " + p.getString("order", "a-z"),
                 "swipe left  → " + nameOf(p.getString("swipe_left", "")),
                 "swipe right → " + nameOf(p.getString("swipe_right", "")),
+                "notifications   ›",
         };
         choose("settings", items, which -> {
             if (which == 0) p.edit().putBoolean("hide_status_bar", !barHidden).apply();
@@ -464,9 +480,178 @@ public class HomeActivity extends Activity {
             else if (which == 7) cycle("order", ORDERS, "a-z");
             else if (which == 8) { pickApp("swipe_left", "swipe left opens"); return; }
             else if (which == 9) { pickApp("swipe_right", "swipe right opens"); return; }
+            else if (which == 10) { notifSettings(); return; }
             applySettings();
             settingsDialog(); // reopen so the new value is visible
         });
+    }
+
+    // ------------------------------------------------------- notifications
+
+    private static String onOff(boolean b) {
+        return b ? "on" : "off";
+    }
+
+    private void notifSettings() {
+        SharedPreferences p = prefs();
+        boolean markers = p.getBoolean(Apps.N_MARKERS, false);
+        boolean listOn = p.getBoolean(Apps.N_LIST, false);
+        boolean focus = p.getBoolean(Apps.N_FOCUS, false);
+        boolean quiet = p.getBoolean(Apps.N_QUIET, false);
+        String[] items = {
+                "unread markers    " + onOff(markers),
+                "notification list " + onOff(listOn),
+                "focus mode        " + onOff(focus),
+                "focus apps        " + Apps.focusApps(this).size() + " ›",
+                "quiet (dnd)       " + onOff(quiet),
+                "notification access " + (Apps.notifAccess(this) ? "allowed" : "off") + " ›",
+                "dnd access        " + (Apps.dndAccess(this) ? "allowed" : "off") + " ›",
+        };
+        choose("notifications", items, which -> {
+            if (which <= 2) {
+                String key = which == 0 ? Apps.N_MARKERS : which == 1 ? Apps.N_LIST : Apps.N_FOCUS;
+                boolean now = !p.getBoolean(key, false);
+                p.edit().putBoolean(key, now).commit();
+                if (which == 2 && !now) Notifs.clearHidden(null);
+                Apps.syncNotifService(this);
+                if (now && !Apps.notifAccess(this)) { accessDialog(); return; }
+                if (which == 2 && now && Apps.focusApps(this).isEmpty()) { pickFocusApps(); return; }
+            } else if (which == 3) {
+                pickFocusApps();
+                return;
+            } else if (which == 4) {
+                p.edit().putBoolean(Apps.N_QUIET, !quiet).commit();
+                if (!quiet && !Apps.dndAccess(this)) { dndDialog(); return; }
+                Apps.setQuiet(this, !quiet);
+            } else if (which == 5) {
+                Apps.openNotifAccess(this);
+                return;
+            } else if (which == 6) {
+                Apps.openDndAccess(this);
+                return;
+            }
+            onNotifsChanged();
+            notifSettings(); // reopen so the new value is visible
+        });
+    }
+
+    private void accessDialog() {
+        Ui.confirm(this, "notification access",
+                "android will ask you to allow notification access for mono, and warn that it "
+                        + "can read all notifications.\n\nmono only counts notifications per app. it "
+                        + "never reads or keeps message text, and it has no internet permission, so "
+                        + "nothing leaves your phone.\n\nswitch it off any time: ··· → "
+                        + "settings → notifications.",
+                "allow", () -> Apps.openNotifAccess(this),
+                null, null);
+    }
+
+    private void dndDialog() {
+        Ui.confirm(this, "do not disturb access",
+                "quiet turns on do not disturb (priority only) while mono is on, and puts your "
+                        + "previous mode back when you switch it off.\n\nandroid needs you to allow "
+                        + "do not disturb access for mono. this can't read your notifications.",
+                "allow", () -> Apps.openDndAccess(this),
+                null, null);
+    }
+
+    private void pickFocusApps() {
+        Set<String> chosen = Apps.focusApps(this);
+        Map<String, String> labels = new LinkedHashMap<>();
+        for (Apps.App a : all) {
+            if (!labels.containsKey(a.pkg) && !a.pkg.equals(getPackageName())) labels.put(a.pkg, a.label);
+        }
+        // apps without an icon that are notifying right now (system apps, push services)
+        for (String pkg : Notifs.counts().keySet()) if (!labels.containsKey(pkg)) labels.put(pkg, pkg);
+        for (String pkg : chosen) if (!labels.containsKey(pkg)) labels.put(pkg, pkg);
+
+        List<String> pkgs = new ArrayList<>(labels.keySet());
+        pkgs.sort((x, y) -> Boolean.compare(!chosen.contains(x), !chosen.contains(y))); // chosen first
+        String[] items = new String[pkgs.size() + 1];
+        items[0] = "← done";
+        for (int i = 0; i < pkgs.size(); i++) {
+            items[i + 1] = (chosen.contains(pkgs.get(i)) ? "[x] " : "[ ] ") + labels.get(pkgs.get(i));
+        }
+        choose("focus mode hides", items, which -> {
+            if (which == 0) {
+                notifSettings();
+                return;
+            }
+            String pkg = pkgs.get(which - 1);
+            if (!chosen.remove(pkg)) chosen.add(pkg);
+            Apps.saveFocusApps(this, chosen);
+            pickFocusApps();
+        });
+    }
+
+    /** "  ·3" in grey after an app name, when unread markers are on. */
+    private CharSequence withMarker(Apps.App a, String text) {
+        if (!prefs().getBoolean(Apps.N_MARKERS, false)) return text;
+        int n = Notifs.count(a.pkg);
+        if (n <= 0) return text;
+        SpannableString s = new SpannableString(text + "  ·" + n);
+        s.setSpan(new ForegroundColorSpan(Apps.GREY), text.length(), s.length(), 0);
+        return s;
+    }
+
+    private void onNotifsChanged() {
+        if (notifBlock == null) return;
+        renderNotifs();
+        if (prefs().getBoolean(Apps.N_MARKERS, false)) renderPins();
+        if (drawerOpen()) results.notifyDataSetChanged();
+    }
+
+    /** The notification list: "whatsapp · 3" lines under the clock. Tap one to open the app. */
+    private void renderNotifs() {
+        notifBlock.removeAllViews();
+        if (!prefs().getBoolean(Apps.N_LIST, false)) {
+            notifBlock.setVisibility(View.GONE);
+            return;
+        }
+        int align = alignGravity();
+        if (!Apps.notifAccess(this)) {
+            notifBlock.addView(notifLine("notifications: allow access ›", Apps.DIM, align,
+                    v -> accessDialog()));
+            notifBlock.setVisibility(View.VISIBLE);
+            return;
+        }
+        Map<String, Apps.App> byPkg = new LinkedHashMap<>();
+        for (Apps.App a : all) if (!byPkg.containsKey(a.pkg)) byPkg.put(a.pkg, a);
+
+        List<Map.Entry<String, Integer>> rows = new ArrayList<>(Notifs.counts().entrySet());
+        rows.removeIf(e -> !byPkg.containsKey(e.getKey()) || e.getKey().equals(getPackageName()));
+        rows.sort((x, y) -> Integer.compare(y.getValue(), x.getValue()));
+        int max = 4;
+        for (int i = 0; i < rows.size() && i < max; i++) {
+            Apps.App a = byPkg.get(rows.get(i).getKey());
+            notifBlock.addView(notifLine(a.label + " · " + rows.get(i).getValue(), Apps.GREY, align,
+                    v -> Apps.open(this, a)));
+        }
+        if (rows.size() > max) {
+            notifBlock.addView(notifLine("+" + (rows.size() - max) + " more", Apps.DIM, align,
+                    v -> Apps.expandNotifications(this)));
+        }
+        for (Map.Entry<String, Integer> e : Notifs.hidden().entrySet()) {
+            Apps.App a = byPkg.get(e.getKey());
+            String name = a != null ? a.label : e.getKey();
+            notifBlock.addView(notifLine(name + " · " + e.getValue() + " hidden", Apps.DIM, align, v -> {
+                Notifs.clearHidden(e.getKey());
+                if (a != null) Apps.open(this, a);
+            }));
+        }
+        notifBlock.setVisibility(notifBlock.getChildCount() > 0 ? View.VISIBLE : View.GONE);
+    }
+
+    private TextView notifLine(String s, int color, int align, View.OnClickListener click) {
+        TextView t = Apps.text(this, s, 15, color);
+        t.setPadding(0, Apps.dp(this, 7), 0, Apps.dp(this, 7));
+        t.setGravity(align);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.END);
+        Apps.pressable(t);
+        t.setOnClickListener(click);
+        t.setLayoutParams(new LinearLayout.LayoutParams(MATCH, WRAP));
+        return t;
     }
 
     private void setupDialog() {
@@ -635,7 +820,7 @@ public class HomeActivity extends Activity {
                 t.setTextColor(best ? Apps.WHITE : Apps.DIM);
             } else {
                 Apps.App a = shown.get(i);
-                t.setText(best ? "> " + a.label : a.label);
+                t.setText(withMarker(a, best ? "> " + a.label : a.label));
                 t.setTextColor(best || query.isEmpty() ? Apps.WHITE : Apps.GREY);
             }
             return t;
