@@ -1,0 +1,7 @@
+# build output
+build/
+
+# signing key + password: never commit, but DO back up
+keystore/
+*.keystore
+*.jks
