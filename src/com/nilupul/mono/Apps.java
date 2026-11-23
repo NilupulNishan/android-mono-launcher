@@ -3,6 +3,7 @@ package com.nilupul.mono;
 import android.app.Activity;
 import android.app.role.RoleManager;
 import android.content.ComponentName;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -118,6 +119,53 @@ final class Apps {
             Class.forName("android.app.StatusBarManager").getMethod("expandNotificationsPanel").invoke(sb);
         } catch (Exception e) {
             Toast.makeText(c, "can't open notifications here; swipe from the top edge", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ------------------------------------------------- black & white screen
+
+    private static final String GRAY_ON = "accessibility_display_daltonizer_enabled";
+    private static final String GRAY_MODE = "accessibility_display_daltonizer";
+    private static final int MONOCHROME = 0; // Color correction -> Grayscale
+
+    /** True once the one-time PC grant has been done (adb shell pm grant ... WRITE_SECURE_SETTINGS). */
+    static boolean canGray(Context c) {
+        return c.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS")
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    static boolean grayWanted(Context c) {
+        return prefs(c).getBoolean("bw_screen", true);
+    }
+
+    /**
+     * Switch Android's own grayscale (Accessibility -> Color correction -> Grayscale) on or off.
+     * The previous colour setting is saved first and restored exactly when switched off.
+     */
+    static void setGray(Context c, boolean on) {
+        if (!canGray(c)) return;
+        ContentResolver r = c.getContentResolver();
+        SharedPreferences p = prefs(c);
+        try {
+            if (on) {
+                if (!p.getBoolean("gray_applied", false)) {
+                    p.edit().putInt("gray_prev_on", Settings.Secure.getInt(r, GRAY_ON, 0))
+                            .putInt("gray_prev_mode", Settings.Secure.getInt(r, GRAY_MODE, -1))
+                            .putBoolean("gray_applied", true)
+                            .apply();
+                }
+                if (Settings.Secure.getInt(r, GRAY_MODE, -1) != MONOCHROME) {
+                    Settings.Secure.putInt(r, GRAY_MODE, MONOCHROME);
+                }
+                if (Settings.Secure.getInt(r, GRAY_ON, 0) != 1) Settings.Secure.putInt(r, GRAY_ON, 1);
+            } else if (p.getBoolean("gray_applied", false)) {
+                int prevMode = p.getInt("gray_prev_mode", -1);
+                if (prevMode >= 0) Settings.Secure.putInt(r, GRAY_MODE, prevMode);
+                Settings.Secure.putInt(r, GRAY_ON, p.getInt("gray_prev_on", 0));
+                p.edit().putBoolean("gray_applied", false).apply();
+            }
+        } catch (RuntimeException ignored) {
+            // permission revoked or setting blocked by the system: leave the screen as it is
         }
     }
 
@@ -291,6 +339,7 @@ final class Apps {
 
     /** Turn mono off: remove its home screen, so Android goes back to the OPPO home screen. */
     static void turnOff(Activity a) {
+        setGray(a, false); // colours come back with the OPPO home screen
         setHomeEnabled(a, false);
         goHome(a);
         Toast.makeText(a, "mono is off. Open \"mono\" from your apps to turn it back on.",

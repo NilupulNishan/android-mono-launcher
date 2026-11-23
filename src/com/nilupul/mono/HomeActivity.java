@@ -132,6 +132,7 @@ public class HomeActivity extends Activity {
         resumed = true;
         if (dirty) reload();
         applyStatusBar();
+        if (Apps.grayWanted(this) && Apps.isOn(this)) Apps.setGray(this, true);
         tick.run();
         Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (sticky != null) showBattery(sticky);
@@ -434,8 +435,11 @@ public class HomeActivity extends Activity {
         SharedPreferences p = prefs();
         boolean barHidden = p.getBoolean("hide_status_bar", true);
         boolean auto = p.getBoolean("auto_open", true);
+        boolean canGray = Apps.canGray(this);
+        boolean gray = Apps.grayWanted(this);
         String[] items = {
                 "status bar      " + (barHidden ? "hidden" : "shown"),
+                "black & white   " + (!canGray ? "needs pc setup" : gray ? "on" : "off"),
                 "clock           " + p.getString("clock", "line"),
                 "text size       " + p.getString("size", "medium"),
                 "align           " + p.getString("align", "left"),
@@ -446,16 +450,36 @@ public class HomeActivity extends Activity {
         };
         choose("settings", items, which -> {
             if (which == 0) p.edit().putBoolean("hide_status_bar", !barHidden).apply();
-            else if (which == 1) cycle("clock", CLOCKS, "line");
-            else if (which == 2) cycle("size", SIZES, "medium");
-            else if (which == 3) cycle("align", ALIGNS, "left");
-            else if (which == 4) p.edit().putBoolean("auto_open", !auto).apply();
-            else if (which == 5) cycle("order", ORDERS, "a-z");
-            else if (which == 6) { pickApp("swipe_left", "swipe left opens"); return; }
-            else if (which == 7) { pickApp("swipe_right", "swipe right opens"); return; }
+            else if (which == 1) {
+                if (!canGray) { graySetupDialog(); return; }
+                p.edit().putBoolean("bw_screen", !gray).apply();
+                Apps.setGray(this, !gray);
+            }
+            else if (which == 2) cycle("clock", CLOCKS, "line");
+            else if (which == 3) cycle("size", SIZES, "medium");
+            else if (which == 4) cycle("align", ALIGNS, "left");
+            else if (which == 5) p.edit().putBoolean("auto_open", !auto).apply();
+            else if (which == 6) cycle("order", ORDERS, "a-z");
+            else if (which == 7) { pickApp("swipe_left", "swipe left opens"); return; }
+            else if (which == 8) { pickApp("swipe_right", "swipe right opens"); return; }
             applySettings();
             settingsDialog(); // reopen so the new value is visible
         });
+    }
+
+    private void graySetupDialog() {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("black & white screen")
+                .setMessage("mono can turn the whole screen grey while it's on, and give your colours "
+                        + "back when you turn it off.\n\nandroid only lets a pc allow this. with the "
+                        + "phone plugged in, run once:\n\nadb shell pm grant com.nilupul.mono "
+                        + "android.permission.WRITE_SECURE_SETTINGS\n\nor switch it by hand: "
+                        + "accessibility → color correction → grayscale.")
+                .setPositiveButton("ok", null)
+                .setNeutralButton("open accessibility", (d, w) -> Apps.tryStart(this,
+                        new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        "can't open accessibility settings"))
+                .show();
     }
 
     private void pickApp(String prefKey, String title) {

@@ -11,13 +11,21 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nilupul.mono"
-    android:versionCode="2"
-    android:versionName="1.1">
+    android:versionCode="3"
+    android:versionName="1.2">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
 
     <!-- Swipe down on the home screen = pull down notifications. -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+
+    <!--
+      Optional "black & white screen". NOT granted on install: only a PC can grant it
+      (adb shell pm grant com.nilupul.mono android.permission.WRITE_SECURE_SETTINGS).
+      mono uses it for one thing only: Android's grayscale colour-correction setting,
+      saved before and restored exactly when mono is turned off.
+    -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 
     <!-- Lets mono see which apps can be opened (package visibility, not a permission). -->
     <queries>

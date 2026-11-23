@@ -19,6 +19,7 @@ A black-and-white, text-only Android home screen in JetBrains Mono, styled after
 - **Status line** (like Waybar): time · date on the left, battery on the right. Tap the time for alarms and the battery for battery settings. Optionally a **big clock** instead, or no clock.
 - **Pinned apps** as plain text, no icons. Hold one to move it up or down, rename it, unpin it, or open app info.
 - **System status bar hidden** on mono's screen by default; swipe down from the top edge to see it. Other apps keep theirs.
+- **Black & white screen** (optional, needs a one-time PC grant, see below): while mono is on, the whole phone is grayscale; turning mono off restores your colours exactly.
 
 **Gestures**
 | Gesture | Action |
@@ -38,11 +39,16 @@ A black-and-white, text-only Android home screen in JetBrains Mono, styled after
 
 **`···` menu**: all apps · settings · hidden apps · home app settings · turn off mono.
 
-**Settings**: status bar (hidden/shown) · clock (line/big/off) · text size (small/medium/large) · align (left/center/right) · auto-open match · app list order · swipe left/right app.
+**Settings**: status bar (hidden/shown) · black & white (on/off) · clock (line/big/off) · text size (small/medium/large) · align (left/center/right) · auto-open match · app list order · swipe left/right app.
 
 ## Safe by design
 
 - **One permission**: `EXPAND_STATUS_BAR` (a normal permission, granted automatically). It lets a swipe down pull open the notification shade and nothing else.
+- **Optional**: `WRITE_SECURE_SETTINGS`, for the black & white screen only. Android never grants it on install; only a PC can:
+  ```
+  adb shell pm grant com.nilupul.mono android.permission.WRITE_SECURE_SETTINGS
+  ```
+  On ColorOS, first turn on Developer options → *Disable permission monitoring*. mono uses it only for Android's grayscale colour correction (`accessibility_display_daltonizer`). It saves your previous setting and restores it when mono is turned off. Without the grant, switch grayscale by hand: Accessibility → Color correction → Grayscale.
 - No internet, no services, no background work, no broadcast receivers in the manifest. Launch counts for "most used" stay on the phone.
 - **Installing changes nothing.** The home screen ships disabled (`android:enabled="false"`).
 - **Easy on/off**: open **mono** from the app list and tap **turn on** or **turn off**. Off disables mono's home-screen component, so Android falls straight back to the OPPO launcher. You can also turn it off from `···` → *turn off mono*.
